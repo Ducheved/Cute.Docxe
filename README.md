@@ -1,11 +1,15 @@
 # DocConverter
 
+![img](https://s3.timeweb.cloud/20d1be9e-3ff922d8-1ca4-4144-be5a-07579a3f953e/cute.png)
+
 ## Overview
 DocConverter is a multi-threaded document converter that simultaneously converts old .doc files into .docx and .xml formats. It uses the Microsoft Office Interop Word library to open and convert the documents. This project is designed to be efficient and fast, utilizing multiple threads to process multiple files at the same time.
 
 ## Requirements
 - Microsoft Office must be installed on your machine.
-- .NET Framework 4.7.2 or higher is required.
+- .NET 8
+- COM Microsoft.Office.Interop.Word
+- Windows 10+
 
 ## Usage
 1. 1. Clone the repository to your local machine.

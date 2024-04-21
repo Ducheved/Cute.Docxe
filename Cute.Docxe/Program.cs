@@ -1,26 +1,91 @@
-﻿using System;
+﻿using Microsoft.Office.Interop.Word;
 using System.Collections.Concurrent;
-using System.IO;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Office.Interop.Word;
-using Console = Colorful.Console;
-using System.Drawing;
-using System.Windows.Forms;
 using System.Diagnostics;
+using System.Drawing;
+using Console = Colorful.Console;
 
 namespace DocConverter
 {
     class Program
     {
+        static Application? word;
         static void Main(string[] args)
         {
+
+            var wordProcesses = Process.GetProcessesByName("WINWORD");
+            if (wordProcesses.Length > 0)
+            {
+                Console.WriteLine("Running Word processes detected. Do you want to close them? (yes/no)", Color.Red);
+                string response = Console.ReadLine();
+                if (response?.ToLower() == "yes")
+                {
+                    foreach (var process in wordProcesses)
+                    {
+                        try
+                        {
+                            process.Kill();
+                            process.WaitForExit();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Failed to close Word process {process.Id}: {ex.Message}", Color.Red);
+                        }
+                    }
+                }
+                else
+                {
+                    return;
+                }
+            }
+
+            Console.CancelKeyPress += (sender, e) =>
+            {
+                Console.WriteLine("Exiting program...");
+                if (word != null)
+                {
+                    word.Quit();
+                    System.Runtime.InteropServices.Marshal.ReleaseComObject(word);
+                }
+                Environment.Exit(0);
+            };
             Console.WriteLine("Author: Ducheved", Color.Yellow);
             Console.WriteLine("Version: 1.0", Color.Yellow);
-            Console.WriteLine("License: Apache", Color.Yellow);
+            Console.WriteLine("License: Apache License Version 2.0", Color.Yellow);
             Console.WriteLine("This program allows you to convert old doc files from a folder to xml and docx simultaneously.", Color.Yellow);
             Console.WriteLine();
+
+            Console.WriteLine($"Available logical processors: {Environment.ProcessorCount}", Color.Cyan);
+            int maxWorkers;
+            while (true)
+            {
+                Console.WriteLine("Enter the number of threads to use:", Color.Cyan);
+                string? threadInput = Console.ReadLine();
+                if (string.IsNullOrEmpty(threadInput) || !int.TryParse(threadInput, out maxWorkers))
+                {
+                    Console.WriteLine("Invalid number of threads. Please enter a valid number.");
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            bool pauseAfterEachFile;
+            while (true)
+            {
+                Console.WriteLine("Do you want to pause after each file to allow for disk write? (yes/no)", Color.Cyan);
+                string? pauseInput = Console.ReadLine();
+                if (pauseInput?.ToLower() == "yes" || pauseInput?.ToLower() == "no")
+                {
+                    pauseAfterEachFile = pauseInput?.ToLower() == "yes";
+                    break;
+                }
+                else
+                {
+                    Console.WriteLine("Invalid input. Please enter 'yes' or 'no'.");
+                }
+            }
+
             Console.WriteLine("Enter the path to the folder with .doc files:", Color.Cyan);
             string? inputFolder = Console.ReadLine();
             if (string.IsNullOrEmpty(inputFolder))
@@ -62,30 +127,32 @@ namespace DocConverter
                 Directory.CreateDirectory(docxFolder);
             }
 
-            ConvertFiles(inputFolder, xmlFolder, docxFolder, outputFolder).Wait();
+            ConvertFiles(inputFolder, xmlFolder, docxFolder, outputFolder, pauseAfterEachFile, maxWorkers).Wait();
         }
 
-        static async Task ConvertFiles(string inputFolder, string xmlFolder, string docxFolder, string outputFolder)
+        static async System.Threading.Tasks.Task ConvertFiles(string inputFolder, string xmlFolder, string docxFolder, string outputFolder, bool pauseAfterEachFile, int maxWorkers)
         {
             string[] docFiles = Directory.GetFiles(inputFolder, "*.doc");
-            int maxWorkers = Environment.ProcessorCount;
 
             ConcurrentQueue<string> fileQueue = new ConcurrentQueue<string>(docFiles);
             ConcurrentBag<string> failedFiles = new ConcurrentBag<string>();
 
             var partitioner = Partitioner.Create(docFiles, true);
+            Application word = new Application();
             Parallel.ForEach(partitioner, new ParallelOptions { MaxDegreeOfParallelism = maxWorkers }, filePath =>
             {
-                Application word = new Application();
-
                 if (!ConvertFile(word, filePath, xmlFolder, docxFolder))
                 {
                     failedFiles.Add(filePath);
                 }
 
-                word.Quit();
-                System.Runtime.InteropServices.Marshal.ReleaseComObject(word);
+                if (pauseAfterEachFile)
+                {
+                    Thread.Sleep(500);
+                }
             });
+            word.Quit();
+            System.Runtime.InteropServices.Marshal.ReleaseComObject(word);
 
             string reportPath = Path.Combine(outputFolder, "conversion_report.txt");
             using (StreamWriter reportFile = new StreamWriter(new FileStream(reportPath, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true)))
@@ -103,7 +170,7 @@ namespace DocConverter
         static bool ConvertFile(Application word, string inputPath, string xmlFolder, string docxFolder)
         {
             string? fileName = Path.GetFileNameWithoutExtension(inputPath);
-            if (fileName == null)
+            if (string.IsNullOrEmpty(fileName))
             {
                 Console.WriteLine($"Failed to get file name from path: {inputPath}", Color.Red);
                 return false;
@@ -114,7 +181,7 @@ namespace DocConverter
             string outputDocxPath = Path.Combine(docxFolder, $"{fileName}.docx");
             string outputXmlPath = Path.Combine(xmlFolder, $"{fileName}.xml");
 
-            Document doc = null;
+            Document? doc = null;
 
             try
             {
